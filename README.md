@@ -1,6 +1,6 @@
-# AndroidXLSViewer
+# Android XLS Viewer library
 
-Simple Android widget wich allow to render and look *.xls files
+Simple Android widget wich allow to render and look *.xls files (excel / spreadsheet)
 Allow to draw only( but easy to add edit functionality)
 Zoom/move are in.
 
@@ -64,3 +64,7 @@ Examples: http://imgur.com/a/pqfZX
      tabHost.addTab(tabSpec);
  }
 ```
+
+##Say to for me:
+WMR R109844875467
+WMZ Z424415381288
