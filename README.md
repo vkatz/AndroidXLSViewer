@@ -65,6 +65,6 @@ Examples: http://imgur.com/a/pqfZX
  }
 ```
 
-##Say to for me:
+##Say "Thanks" for me:
 WMR R109844875467
 WMZ Z424415381288
