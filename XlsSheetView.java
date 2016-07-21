@@ -6,10 +6,7 @@ import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.util.AttributeSet;
-import android.view.GestureDetector;
-import android.view.MotionEvent;
-import android.view.ScaleGestureDetector;
-import android.view.View;
+import android.view.*;
 import android.widget.Scroller;
 import common.LengthUnit;
 import jxl.Cell;
@@ -20,12 +17,14 @@ import jxl.format.*;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Created by Katz on 14.07.2016.
  */
 @SuppressWarnings("WeakerAccess")
-public class XlsSheetView extends View {
+public class XlsSheetView extends SurfaceView {
     private static final float H_SCALE_FACTOR = 14.75f;
     private static final float W_SCALE_FACTOR = 36.40f;
     private static final float FONT_SCALE_FACTOR = 1.25f;
@@ -56,15 +55,62 @@ public class XlsSheetView extends View {
     private Sheet sheet;
     private Paint paint;
     private TextPaint textPaint;
-    private boolean ready = false;
+    private boolean sheetReady = false;
     private float previousZoom = 1f, zoom = 1f;
     private int hSizes[];
     private int wSizes[];
 
-    //images optimizations
-    private HashMap<Integer, Bitmap> imagesCache;
+    //optimizations
+    private HashMap<Integer, Bitmap> imagesCache = new HashMap<>();
     private Rect from = new Rect();
     private RectF to = new RectF();
+    private HashMap<String, Layout> layoutsMap = new HashMap<>();
+    private HashSet<String> unusedLayoutsMap = new HashSet<>();
+    private AtomicBoolean needRedraw = new AtomicBoolean(true);
+
+    //init surface
+    {
+        setZOrderOnTop(true);
+        getHolder().setFormat(PixelFormat.TRANSLUCENT);
+        getHolder().addCallback(new SurfaceHolder.Callback() {
+            private Thread renderThread;
+            private AtomicBoolean surfaceReady;
+
+            @Override
+            public void surfaceCreated(final SurfaceHolder surfaceHolder) {
+                surfaceReady = new AtomicBoolean(true);
+                renderThread = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        while (surfaceReady.get()) {
+                            if (needRedraw.get()) {
+                                needRedraw.set(false);
+                                boolean repeat = true;
+                                while (repeat) {
+                                    Canvas canvas = surfaceHolder.lockCanvas();
+                                    if (canvas != null) {
+                                        repeat = drawSheet(canvas);
+                                        surfaceHolder.unlockCanvasAndPost(canvas);
+                                    } else repeat = false;
+                                }
+                            }
+                        }
+                    }
+                });
+                renderThread.start();
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder surfaceHolder, int i, int i1, int i2) {
+
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
+                surfaceReady.set(false);
+            }
+        });
+    }
 
     public XlsSheetView(Context context) {
         super(context);
@@ -83,7 +129,6 @@ public class XlsSheetView extends View {
         fixedWidth = (int) (dp * FIXED_CELL_WIDTH);
         fixedHeight = (int) (dp * FIXED_CELL_HEIGHT);
         cellTextPadding = (int) (dp * DEFAULT_TEXT_PADDING);
-        imagesCache = new HashMap<>();
 
         this.sheet = sheet;
         float hScale = dp / H_SCALE_FACTOR;
@@ -139,7 +184,7 @@ public class XlsSheetView extends View {
             }
         });
         scroller = new Scroller(getContext());
-        ready = true;
+        sheetReady = true;
     }
 
     private float clamp(float val, float min, float max) {
@@ -185,12 +230,18 @@ public class XlsSheetView extends View {
     }
 
     @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        if (ready) drawSheet(canvas);
+    public void setVisibility(int visibility) {
+        super.setVisibility(visibility);
+        if (visibility == VISIBLE) needRedraw.set(true);
     }
 
-    private String intToCollumName(int column) {
+    @Override
+    public void invalidate() {
+        super.invalidate();
+        needRedraw.set(true);
+    }
+
+    private String intToColumnName(int column) {
         String sChars = "0ABCDEFGHIJKLMNOPQRSTUVWXYZ";
         String sCol = "";
         while (column > 26) {
@@ -203,17 +254,24 @@ public class XlsSheetView extends View {
         return sCol;
     }
 
-    private void drawSheet(Canvas canvas) {
-        scroller.computeScrollOffset();
-        canvas.drawColor(Color.WHITE);
-        canvas.scale(zoom, zoom);
-        canvas.translate(-scroller.getCurrX(), -scroller.getCurrY());
-        Range[] mergedCells = sheet.getMergedCells();
+    /**
+     * @param canvas - drawing canvas
+     * @return true, if need redraw (in scroll)
+     */
+    private boolean drawSheet(Canvas canvas) {
+        if (!sheetReady) return false;
         //limits
+        scroller.computeScrollOffset();
         float l = scroller.getCurrX();
         float t = scroller.getCurrY();
         float r = l + getMeasuredWidth();
         float b = t + getMeasuredHeight();
+        //prepare
+        canvas.drawColor(Color.WHITE);
+        canvas.scale(zoom, zoom);
+        canvas.translate(-l, -t);
+        Range[] mergedCells = sheet.getMergedCells();
+        unusedLayoutsMap.addAll(layoutsMap.keySet());
         //draw lines
         paint.setColor(0xffcccccc);
         for (int i : wSizes)
@@ -223,7 +281,6 @@ public class XlsSheetView extends View {
             if (i >= t && i <= b)
                 canvas.drawRect(0, i - dp, sheetWidth, i, paint);
         //draw table
-        paint.setColor(Color.BLACK);
         for (int i = 0; i < sheet.getColumns(); i++) {
             for (int j = 0; j < sheet.getRows(); j++) {
                 if (wSizes[i + 1] < l || hSizes[j + 1] < t || wSizes[i] > r || hSizes[j] > b) continue;
@@ -256,7 +313,7 @@ public class XlsSheetView extends View {
                     }
                 }
                 if (cell.getContents() != null)
-                    drawText(x, y, w, h, cell.getContents(), cellFormat, canvas);
+                    drawText("" + i + "-" + j, x, y, w, h, cell.getContents(), cellFormat, canvas);
             }
         }
         //draw borders
@@ -308,26 +365,31 @@ public class XlsSheetView extends View {
         for (int i = 0; i < sheet.getColumns(); i++) {
             if (wSizes[i + 1] < l || wSizes[i] > r) continue;
             paint.setColor(0xffcccccc);
-            canvas.drawRect(wSizes[i] - dp, scroller.getCurrY(), wSizes[i + 1] + dp, scroller.getCurrY() + fixedHeight + dp, paint);
+            canvas.drawRect(wSizes[i] - dp, t, wSizes[i + 1] + dp, t + fixedHeight + dp, paint);
             paint.setColor(0xfff3f3f3);
-            canvas.drawRect(wSizes[i], scroller.getCurrY() + dp, wSizes[i + 1], scroller.getCurrY() + fixedHeight, paint);
+            canvas.drawRect(wSizes[i], t + dp, wSizes[i + 1], t + fixedHeight, paint);
             paint.setColor(Color.BLACK);
-            drawText(wSizes[i], scroller.getCurrY(), wSizes[i + 1] - wSizes[i], fixedHeight, intToCollumName(i + 1), null, canvas);
+            drawText("c" + i, wSizes[i], (int) t, wSizes[i + 1] - wSizes[i], fixedHeight, intToColumnName(i + 1), null, canvas);
         }
         for (int i = 0; i < sheet.getRows(); i++) {
             if (hSizes[i + 1] < t || hSizes[i] > b) continue;
             paint.setColor(0xffcccccc);
-            canvas.drawRect(scroller.getCurrX(), hSizes[i] - dp, scroller.getCurrX() + fixedWidth + dp, hSizes[i + 1] + dp, paint);
+            canvas.drawRect(l, hSizes[i] - dp, l + fixedWidth + dp, hSizes[i + 1] + dp, paint);
             paint.setColor(0xfff3f3f3);
-            canvas.drawRect(scroller.getCurrX() + dp, hSizes[i], scroller.getCurrX() + fixedWidth, hSizes[i + 1], paint);
+            canvas.drawRect(l + dp, hSizes[i], l + fixedWidth, hSizes[i + 1], paint);
             paint.setColor(Color.BLACK);
-            drawText(scroller.getCurrX(), hSizes[i], fixedWidth, hSizes[i + 1] - hSizes[i], "" + (i + 1), null, canvas);
+            drawText("r" + i, (int) l, hSizes[i], fixedWidth, hSizes[i + 1] - hSizes[i], "" + (i + 1), null, canvas);
         }
         paint.setColor(0xffcccccc);
-        canvas.drawRect(scroller.getCurrX(), scroller.getCurrY(), scroller.getCurrX() + fixedWidth + dp, scroller.getCurrY() + fixedHeight + dp, paint);
+        canvas.drawRect(l, t, l + fixedWidth + dp, t + fixedHeight + dp, paint);
         paint.setColor(0xfff3f3f3);
-        canvas.drawRect(scroller.getCurrX() + dp, scroller.getCurrY() + dp, scroller.getCurrX() + fixedWidth, scroller.getCurrY() + fixedHeight, paint);
-        if (!scroller.isFinished()) postInvalidate();
+        canvas.drawRect(l + dp, t + dp, l + fixedWidth, t + fixedHeight, paint);
+//        clear unused layouts
+        for (String i : unusedLayoutsMap) layoutsMap.remove(i);
+        unusedLayoutsMap.clear();
+        System.gc();
+        //redraw in case we are in fling
+        return !scroller.isFinished();
     }
 
     private void drawBorder(float x, float y, float w, float h, BorderLineStyle style, Colour color, Canvas canvas) {
@@ -340,11 +402,12 @@ public class XlsSheetView extends View {
         canvas.drawRect(x - size, y - size, x + w + size, y + h + size, paint);
     }
 
-    private void drawText(int x, int y, int w, int h, String text, CellFormat cellFormat, Canvas canvas) {
-        canvas.save();
-        canvas.translate(x + cellTextPadding, y + cellTextPadding);
+    private void drawText(String id, int x, int y, int w, int h, String text, CellFormat cellFormat, Canvas canvas) {
         int fw = w - 2 * cellTextPadding;
         int fh = h - 2 * cellTextPadding;
+        if (fw <= 0 || fh <= 0) return;
+        canvas.save();
+        canvas.translate(x + cellTextPadding, y + cellTextPadding);
         if (canvas.clipRect(0, 0, fw, fh)) {
             Layout.Alignment hAlign;
             int vAlign; //0 - top, 1-mid, 2-bot
@@ -369,7 +432,14 @@ public class XlsSheetView extends View {
                 textPaint.setTypeface(Typeface.DEFAULT);
                 textPaint.setUnderlineText(false);
             }
-            StaticLayout layout = new StaticLayout(text, textPaint, fw, hAlign, 1, 0, false);
+
+            Layout layout;
+            if (layoutsMap.containsKey(id)) layout = layoutsMap.get(id);
+            else {
+                layout = new StaticLayout(text, textPaint, fw, hAlign, 1, 0, false);
+                layoutsMap.put(id, layout);
+            }
+            unusedLayoutsMap.remove(id);
             //no need adjust for vAlign ==0 (top)
             if (vAlign == 1) canvas.translate(0, (fh - layout.getHeight()) / 2);
             else if (vAlign == 2) canvas.translate(0, fh - layout.getHeight());
