@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="UTF-8">
+    <title>Android xls viewer by vkatz</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="stylesheets/normalize.css" media="screen">
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans:400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="stylesheets/github-light.css" media="screen">
+  </head>
+  <body>
+    <section class="page-header">
+      <h1 class="project-name">Android xls viewer</h1>
+      <h2 class="project-tagline">android xls spreadsheet viewer </h2>
+      <a href="https://github.com/vkatz/AndroidXLSViewer" class="btn">View on GitHub</a>
+      <a href="https://github.com/vkatz/AndroidXLSViewer/zipball/master" class="btn">Download .zip</a>
+      <a href="https://github.com/vkatz/AndroidXLSViewer/tarball/master" class="btn">Download .tar.gz</a>
+    </section>
+
+    <section class="main-content">
+      <h1>
+<a id="android-xls-viewer-library" class="anchor" href="#android-xls-viewer-library" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Android XLS Viewer library</h1>
+
+<p>Simple Android widget wich allow to render and look *.xls files (excel / spreadsheet)
+Allow to draw only( but easy to add edit functionality)
+Zoom/move are in.</p>
+
+<p>Imlpemented elements:
+font bold/normal + color
+borders - only sides (bold and normal) + colors
+images + cache optimization</p>
+
+<p>Use as u want. Provided as it is.</p>
+
+<p>Examples: <a href="http://imgur.com/a/pqfZX">http://imgur.com/a/pqfZX</a></p>
+
+<h2>
+<a id="layout" class="anchor" href="#layout" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Layout</h2>
+
+<div class="highlight highlight-text-xml"><pre>&lt;?<span class="pl-ent">xml</span><span class="pl-e"> version</span>=<span class="pl-s"><span class="pl-pds">"</span>1.0<span class="pl-pds">"</span></span><span class="pl-e"> encoding</span>=<span class="pl-s"><span class="pl-pds">"</span>utf-8<span class="pl-pds">"</span></span>?&gt;
+&lt;<span class="pl-ent">RelativeLayout</span>
+        <span class="pl-e">xmlns</span><span class="pl-e">:</span><span class="pl-e">android</span>=<span class="pl-s"><span class="pl-pds">"</span>http://schemas.android.com/apk/res/android<span class="pl-pds">"</span></span>
+        <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">orientation</span>=<span class="pl-s"><span class="pl-pds">"</span>vertical<span class="pl-pds">"</span></span>
+        <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_width</span>=<span class="pl-s"><span class="pl-pds">"</span>fill_parent<span class="pl-pds">"</span></span>
+        <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_height</span>=<span class="pl-s"><span class="pl-pds">"</span>fill_parent<span class="pl-pds">"</span></span>
+        <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">background</span>=<span class="pl-s"><span class="pl-pds">"</span>#fff<span class="pl-pds">"</span></span>&gt;
+    &lt;<span class="pl-ent">TabHost</span> <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_width</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+             <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_height</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+             <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">id</span>=<span class="pl-s"><span class="pl-pds">"</span>@+id/sheets<span class="pl-pds">"</span></span>&gt;
+        &lt;<span class="pl-ent">LinearLayout</span> <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_width</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+                      <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_height</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+                      <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">orientation</span>=<span class="pl-s"><span class="pl-pds">"</span>vertical<span class="pl-pds">"</span></span>&gt;
+            &lt;<span class="pl-ent">HorizontalScrollView</span> <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_width</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+                                  <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_height</span>=<span class="pl-s"><span class="pl-pds">"</span>wrap_content<span class="pl-pds">"</span></span>&gt;
+                &lt;<span class="pl-ent">TabWidget</span> <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">id</span>=<span class="pl-s"><span class="pl-pds">"</span>@android:id/tabs<span class="pl-pds">"</span></span>
+                           <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_width</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+                           <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_height</span>=<span class="pl-s"><span class="pl-pds">"</span>wrap_content<span class="pl-pds">"</span></span>&gt;
+                &lt;/<span class="pl-ent">TabWidget</span>&gt;
+            &lt;/<span class="pl-ent">HorizontalScrollView</span>&gt;
+            &lt;<span class="pl-ent">FrameLayout</span> <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">id</span>=<span class="pl-s"><span class="pl-pds">"</span>@android:id/tabcontent<span class="pl-pds">"</span></span>
+                         <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_width</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>
+                         <span class="pl-e">android</span><span class="pl-e">:</span><span class="pl-e">layout_height</span>=<span class="pl-s"><span class="pl-pds">"</span>match_parent<span class="pl-pds">"</span></span>&gt;
+            &lt;/<span class="pl-ent">FrameLayout</span>&gt;
+        &lt;/<span class="pl-ent">LinearLayout</span>&gt;
+    &lt;/<span class="pl-ent">TabHost</span>&gt;
+&lt;/<span class="pl-ent">RelativeLayout</span>&gt;</pre></div>
+
+<h2>
+<a id="how-to-add-tabs" class="anchor" href="#how-to-add-tabs" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>How to add tabs</h2>
+
+<div class="highlight highlight-source-java"><pre> <span class="pl-smi">InputStream</span> xlsStream <span class="pl-k">=</span> <span class="pl-k">new</span> <span class="pl-smi">FileInputStream</span>(file);
+ <span class="pl-smi">Workbook</span> xl <span class="pl-k">=</span> <span class="pl-smi">Workbook</span><span class="pl-k">.</span>getWorkbook(xlsStream);
+ <span class="pl-smi">TabHost</span> tabHost <span class="pl-k">=</span> (<span class="pl-smi">TabHost</span>) findViewById(<span class="pl-smi">R</span><span class="pl-k">.</span>id<span class="pl-k">.</span>sheets);
+ tabHost<span class="pl-k">.</span>setup();
+ <span class="pl-k">for</span> (<span class="pl-k">final</span> <span class="pl-smi">Sheet</span> sheet <span class="pl-k">:</span> xl<span class="pl-k">.</span>getSheets()) {
+     <span class="pl-smi">TabHost</span><span class="pl-k">.</span><span class="pl-smi">TabSpec</span> tabSpec <span class="pl-k">=</span> tabHost<span class="pl-k">.</span>newTabSpec(sheet<span class="pl-k">.</span>getName());
+     tabSpec<span class="pl-k">.</span>setContent(<span class="pl-k">new</span> <span class="pl-smi">TabHost</span>.<span class="pl-smi">TabContentFactory</span>() {
+         <span class="pl-k">@Override</span>
+         <span class="pl-k">public</span> <span class="pl-smi">View</span> <span class="pl-en">createTabContent</span>(<span class="pl-smi">String</span> <span class="pl-v">s</span>) {
+             <span class="pl-smi">XlsSheetView</span> view <span class="pl-k">=</span> <span class="pl-k">new</span> <span class="pl-smi">XlsSheetView</span>(<span class="pl-smi">XLSActivity</span><span class="pl-k">.</span><span class="pl-v">this</span>);
+             view<span class="pl-k">.</span>setSheet(sheet);
+             <span class="pl-k">return</span> view;
+         }
+     });
+     tabSpec<span class="pl-k">.</span>setIndicator(<span class="pl-s"><span class="pl-pds">"</span>    <span class="pl-pds">"</span></span> <span class="pl-k">+</span> sheet<span class="pl-k">.</span>getName() <span class="pl-k">+</span> <span class="pl-s"><span class="pl-pds">"</span>    <span class="pl-pds">"</span></span>);
+     tabHost<span class="pl-k">.</span>addTab(tabSpec);
+ }</pre></div>
+
+<h2>
+<a id="say-thanks-for-me" class="anchor" href="#say-thanks-for-me" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Say "Thanks" for me:</h2>
+
+<p>WMR R109844875467
+WMZ Z424415381288</p>
+
+      <footer class="site-footer">
+        <span class="site-footer-owner"><a href="https://github.com/vkatz/AndroidXLSViewer">Android xls viewer</a> is maintained by <a href="https://github.com/vkatz">vkatz</a>.</span>
+
+        <span class="site-footer-credits">This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the <a href="https://github.com/jasonlong/cayman-theme">Cayman theme</a> by <a href="https://twitter.com/jasonlong">Jason Long</a>.</span>
+      </footer>
+
+    </section>
+
+  
+  </body>
+</html>
