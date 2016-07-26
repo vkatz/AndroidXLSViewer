@@ -6,14 +6,15 @@ import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.util.AttributeSet;
-import android.view.*;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
+import android.view.TextureView;
 import android.widget.Scroller;
 import common.LengthUnit;
-import jxl.Cell;
-import jxl.Image;
-import jxl.Range;
-import jxl.Sheet;
+import jxl.*;
 import jxl.format.*;
+import jxl.format.CellFormat;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.HashMap;
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Created by Katz on 14.07.2016.
  */
 @SuppressWarnings("WeakerAccess")
-public class XlsSheetView extends SurfaceView {
+public class XlsSheetView extends TextureView {
     private static final float H_SCALE_FACTOR = 14.75f;
     private static final float W_SCALE_FACTOR = 36.40f;
     private static final float FONT_SCALE_FACTOR = 1.25f;
@@ -57,27 +58,25 @@ public class XlsSheetView extends SurfaceView {
     private TextPaint textPaint;
     private boolean sheetReady = false;
     private float previousZoom = 1f, zoom = 1f;
-    private int hSizes[];
-    private int wSizes[];
+    private int rowSizes[];
+    private int columnSizes[];
 
     //optimizations
     private HashMap<Integer, Bitmap> imagesCache = new HashMap<>();
-    private Rect from = new Rect();
-    private RectF to = new RectF();
+    private Rect tmpRect = new Rect();
+    private RectF tmpRectF = new RectF();
     private HashMap<String, Layout> layoutsMap = new HashMap<>();
     private HashSet<String> unusedLayoutsMap = new HashSet<>();
     private AtomicBoolean needRedraw = new AtomicBoolean(true);
 
     //init surface
     {
-        setZOrderOnTop(true);
-        getHolder().setFormat(PixelFormat.TRANSLUCENT);
-        getHolder().addCallback(new SurfaceHolder.Callback() {
+        setSurfaceTextureListener(new SurfaceTextureListener() {
             private Thread renderThread;
             private AtomicBoolean surfaceReady;
 
             @Override
-            public void surfaceCreated(final SurfaceHolder surfaceHolder) {
+            public void onSurfaceTextureAvailable(final SurfaceTexture surfaceTexture, int i, int i1) {
                 surfaceReady = new AtomicBoolean(true);
                 renderThread = new Thread(new Runnable() {
                     @Override
@@ -87,10 +86,10 @@ public class XlsSheetView extends SurfaceView {
                                 needRedraw.set(false);
                                 boolean repeat = true;
                                 while (repeat) {
-                                    Canvas canvas = surfaceHolder.lockCanvas();
+                                    Canvas canvas = lockCanvas();
                                     if (canvas != null) {
                                         repeat = drawSheet(canvas);
-                                        surfaceHolder.unlockCanvasAndPost(canvas);
+                                        unlockCanvasAndPost(canvas);
                                     } else repeat = false;
                                 }
                             }
@@ -101,13 +100,28 @@ public class XlsSheetView extends SurfaceView {
             }
 
             @Override
-            public void surfaceChanged(SurfaceHolder surfaceHolder, int i, int i1, int i2) {
+            public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int i, int i1) {
 
             }
 
             @Override
-            public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
                 surfaceReady.set(false);
+                boolean retry = true;
+                while (retry) {
+                    try {
+                        renderThread.join();
+                        retry = false;
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {
+
             }
         });
     }
@@ -136,19 +150,21 @@ public class XlsSheetView extends SurfaceView {
         int columnOffset = fixedWidth;
         int rowOffset = fixedHeight;
 
-        wSizes = new int[sheet.getColumns() + 1];
+        columnSizes = new int[sheet.getColumns() + 1];
         for (int i = 0; i < sheet.getColumns(); i++) {
-            wSizes[i] = columnOffset;
-            columnOffset += (int) (sheet.getColumnView(i).getSize() * wScale);
+            columnSizes[i] = columnOffset;
+            CellView columnView = sheet.getColumnView(i);
+            if (!columnView.isHidden()) columnOffset += (int) (columnView.getSize() * wScale);
         }
-        wSizes[sheet.getColumns()] = columnOffset;
+        columnSizes[sheet.getColumns()] = columnOffset;
 
-        hSizes = new int[sheet.getRows() + 1];
+        rowSizes = new int[sheet.getRows() + 1];
         for (int i = 0; i < sheet.getRows(); i++) {
-            hSizes[i] = rowOffset;
-            rowOffset += (int) (sheet.getRowView(i).getSize() * hScale);
+            rowSizes[i] = rowOffset;
+            CellView rowView = sheet.getRowView(i);
+            if (!rowView.isHidden()) rowOffset += (int) (rowView.getSize() * hScale);
         }
-        hSizes[sheet.getRows()] = rowOffset;
+        rowSizes[sheet.getRows()] = rowOffset;
 
         sheetWidth = columnOffset;
         sheetHeight = rowOffset;
@@ -205,12 +221,12 @@ public class XlsSheetView extends SurfaceView {
     public void scrollBy(int distanceX, int distanceY) {
         scroller.startScroll(0, 0, (int) clamp(scroller.getCurrX() + distanceX, 0, getMaxScrollX()), (int) clamp(scroller.getCurrY() + distanceY, 0, getMaxScrollY()), 0);
         scroller.computeScrollOffset();
-        invalidate();
+        redraw();
     }
 
     public void flingBy(int velocityX, int velocityY) {
         scroller.fling(scroller.getCurrX(), scroller.getCurrY(), -velocityX, -velocityY, 0, getMaxScrollX(), 0, getMaxScrollY());
-        invalidate();
+        redraw();
     }
 
     public void zoomBy(float dz, float fx, float fy) {
@@ -232,13 +248,16 @@ public class XlsSheetView extends SurfaceView {
     @Override
     public void setVisibility(int visibility) {
         super.setVisibility(visibility);
-        if (visibility == VISIBLE) needRedraw.set(true);
+        if (visibility == VISIBLE) redraw();
+    }
+
+    public void redraw() {
+        needRedraw.set(true);
     }
 
     @Override
     public void invalidate() {
         super.invalidate();
-        needRedraw.set(true);
     }
 
     private String intToColumnName(int column) {
@@ -254,18 +273,37 @@ public class XlsSheetView extends SurfaceView {
         return sCol;
     }
 
+    private boolean isOnScreen(int pos, boolean fixed, int small, int big, int fixedSize) {
+        return small + (fixed ? 0 : fixedSize) <= pos && pos <= big;
+    }
+
+    private boolean isOnScreen(int pos, int size, boolean fixed, int small, int big, int fixedSize) {
+        return small + (fixed ? 0 : fixedSize) <= pos + size && pos <= big;
+    }
+
+    private boolean isNeedClip(int x, int y, int left, int top, boolean fixedX, boolean fixedY, int fw, int fh) {
+        return (!fixedX && x - left < fw) || (!fixedY && y - top < fh);
+    }
+
     /**
      * @param canvas - drawing canvas
      * @return true, if need redraw (in scroll)
      */
+    @SuppressWarnings("ConstantConditions")
     private boolean drawSheet(Canvas canvas) {
         if (!sheetReady) return false;
         //limits
+        int fixedColumns = sheet.getSettings().getHorizontalFreeze();
+        int fixedRows = sheet.getSettings().getVerticalFreeze();
         scroller.computeScrollOffset();
-        float l = scroller.getCurrX();
-        float t = scroller.getCurrY();
-        float r = l + getMeasuredWidth();
-        float b = t + getMeasuredHeight();
+        int fixedColumnSize = columnSizes[fixedColumns];
+        int fixedRowSize = rowSizes[fixedRows];
+        int fixColumnOffset = fixedColumns == 0 ? 0 : (int) (3 * dp);
+        int fixRowOffset = fixedRows == 0 ? 0 : (int) (3 * dp);
+        int l = scroller.getCurrX();
+        int t = scroller.getCurrY();
+        int r = l + getMeasuredWidth();
+        int b = t + getMeasuredHeight();
         //prepare
         canvas.drawColor(Color.WHITE);
         canvas.scale(zoom, zoom);
@@ -274,36 +312,63 @@ public class XlsSheetView extends SurfaceView {
         unusedLayoutsMap.addAll(layoutsMap.keySet());
         //draw lines
         paint.setColor(0xffcccccc);
-        for (int i : wSizes)
-            if (i >= l && i <= r)
-                canvas.drawRect(i - dp, 0, i, sheetHeight, paint);
-        for (int i : hSizes)
-            if (i >= t && i <= b)
-                canvas.drawRect(0, i - dp, sheetWidth, i, paint);
+        for (int i = 0; i < columnSizes.length; i++) {
+            int value = columnSizes[i];
+            if (i <= fixedColumns) value += l;
+            else value += fixColumnOffset;
+            if (isOnScreen(value, i <= fixedColumns, l, r, fixedColumnSize))
+                canvas.drawRect(value - dp, 0, value, sheetHeight, paint);
+        }
+        for (int i = 0; i < rowSizes.length; i++) {
+            int value = rowSizes[i];
+            if (i <= fixedRows) value += t;
+            else value += fixRowOffset;
+            if (isOnScreen(value, i <= fixedRows, t, b, fixedRowSize))
+                canvas.drawRect(0, value - dp, sheetWidth, value, paint);
+        }
         //draw table
         for (int i = 0; i < sheet.getColumns(); i++) {
             for (int j = 0; j < sheet.getRows(); j++) {
-                if (wSizes[i + 1] < l || hSizes[j + 1] < t || wSizes[i] > r || hSizes[j] > b) continue;
                 Cell cell = sheet.getCell(i, j);
                 CellFormat cellFormat = cell.getCellFormat();
-                int x = wSizes[i];
-                int y = hSizes[j];
-                int w = wSizes[i + 1] - x;
-                int h = hSizes[j + 1] - y;
+                int x = columnSizes[i];
+                int y = rowSizes[j];
+                int w = columnSizes[i + 1] - x;
+                int h = rowSizes[j + 1] - y;
+                if (w == 0 || h == 0) continue;
+                if (i < fixedColumns) x += l;
+                else x += fixColumnOffset;
+                if (j < fixedRows) y += t;
+                else y += fixRowOffset;
+                if (!isOnScreen(x, w, i < fixedColumns, l, r, fixedColumnSize) || !isOnScreen(y, h, j < fixedRows, t, b, fixedRowSize)) continue;
                 //check for merged
                 boolean proceed = true;
+                boolean mergedCellRoot = false;
                 for (Range mc : mergedCells) {
                     Cell tl = mc.getTopLeft();
                     Cell br = mc.getBottomRight();
                     if (cell == tl) {
-                        w = wSizes[br.getColumn() + 1] - x;
-                        h = hSizes[br.getRow() + 1] - y;
-                        paint.setColor(Color.WHITE);
-                        canvas.drawRect(x, y, x + w - dp, y + h - dp, paint);
+                        w = columnSizes[br.getColumn() + 1] - x;
+                        h = rowSizes[br.getRow() + 1] - y;
+                        mergedCellRoot = true;
                     } else if (i >= tl.getColumn() && i <= br.getColumn() && j >= tl.getRow() && j <= br.getRow())
                         proceed = false;
                 }
                 if (!proceed) continue;
+                int save = 0;
+                boolean clipped = false;
+                //clip cells that intercept freezed cells
+                if (isNeedClip(x, y, l, t, i < fixedColumns, j < fixedRows, fixedColumnSize, fixedRowSize)) {
+                    save = canvas.save();
+                    clipped = true;
+                    tmpRect.set(i < fixedColumns ? 0 : fixedColumnSize, j < fixedRows ? 0 : fixedRowSize, getMeasuredWidth(), getMeasuredHeight());
+                    tmpRect.offset(l, t);
+                    canvas.clipRect(tmpRect);
+                }
+                if (mergedCellRoot) {
+                    paint.setColor(Color.WHITE);
+                    canvas.drawRect(x, y, x + w - dp, y + h - dp, paint);
+                }
                 if (cellFormat != null) {
                     RGB rgb = cellFormat.getBackgroundColour().getDefaultRGB();
                     int bgColor = Color.rgb(rgb.getRed(), rgb.getGreen(), rgb.getBlue());
@@ -314,77 +379,120 @@ public class XlsSheetView extends SurfaceView {
                 }
                 if (cell.getContents() != null)
                     drawText("" + i + "-" + j, x, y, w, h, cell.getContents(), cellFormat, canvas);
+                if (clipped) canvas.restoreToCount(save);
             }
         }
         //draw borders
         for (int i = 0; i < sheet.getColumns(); i++) {
             for (int j = 0; j < sheet.getRows(); j++) {
-                if (wSizes[i + 1] < l || hSizes[j + 1] < t || wSizes[i] > r || hSizes[j] > b) continue;
+                int x = columnSizes[i];
+                int y = rowSizes[j];
+                int w = columnSizes[i + 1] - x;
+                int h = rowSizes[j + 1] - y;
+                if (w == 0 || h == 0) continue;
+                if (i < fixedColumns) x += l;
+                else x += fixColumnOffset;
+                if (j < fixedRows) y += t;
+                else y += fixRowOffset;
+                if (!isOnScreen(x, w, i < fixedColumns, l, r, fixedColumnSize) || !isOnScreen(y, h, j < fixedRows, t, b, fixedRowSize)) continue;
                 Cell cell = sheet.getCell(i, j);
                 CellFormat cellFormat = cell.getCellFormat();
-                int x = wSizes[i];
-                int y = hSizes[j];
-                int w = wSizes[i + 1] - x;
-                int h = hSizes[j + 1] - y;
                 if (cellFormat != null) {
+                    int save = 0;
+                    boolean clipped = false;
+                    //clip cells that intercept freezed cells
+                    if (isNeedClip(x, y, l, t, i < fixedColumns, j < fixedRows, fixedColumnSize, fixedRowSize)) {
+                        save = canvas.save();
+                        clipped = true;
+                        tmpRect.set(i < fixedColumns ? 0 : fixedColumnSize, j < fixedRows ? 0 : fixedRowSize, getMeasuredWidth(), getMeasuredHeight());
+                        tmpRect.offset(l, t);
+                        canvas.clipRect(tmpRect);
+                    }
                     drawBorder(x - dp, y - dp, dp, h + dp, cellFormat.getBorderLine(Border.LEFT), cellFormat.getBorderColour(Border.LEFT), canvas);
-                    drawBorder(x - dp + w, y - dp, dp, h + dp, cellFormat.getBorderLine(Border.RIGHT), cellFormat.getBorderColour(Border.RIGHT), canvas);
                     drawBorder(x - dp, y - dp, w + dp, dp, cellFormat.getBorderLine(Border.TOP), cellFormat.getBorderColour(Border.TOP), canvas);
+                    drawBorder(x - dp + w, y - dp, dp, h + dp, cellFormat.getBorderLine(Border.RIGHT), cellFormat.getBorderColour(Border.RIGHT), canvas);
                     drawBorder(x - dp, y - dp + h, w + dp, dp, cellFormat.getBorderLine(Border.BOTTOM), cellFormat.getBorderColour(Border.BOTTOM), canvas);
+                    if (clipped) canvas.restoreToCount(save);
                 }
             }
         }
         //draw images
-        for (int i = 0; i < sheet.getNumberOfImages(); i++) {
-            Image drawing = sheet.getDrawing(i);
+        for (int k = 0; k < sheet.getNumberOfImages(); k++) {
+            Image drawing = sheet.getDrawing(k);
             double rawX = drawing.getColumn();
             double rawY = drawing.getRow();
-            float x = (float) (wSizes[(int) rawX] + (rawX % 1) * (wSizes[(int) rawX + 1] - wSizes[(int) rawX]));
-            float y = (float) (hSizes[(int) rawY] + (rawY % 1) * (hSizes[(int) rawY + 1] - hSizes[(int) rawY]));
-            float w = (float) drawing.getWidth(LengthUnit.POINTS) * IMAGE_W_SCALE_FACTOR * dp;
-            float h = (float) drawing.getHeight(LengthUnit.POINTS) * IMAGE_H_SCALE_FACTOR * dp;
-            if (x > r || y > b || x + w < l || y + h < t) {
-                if (imagesCache.containsKey(i)) {
-                    imagesCache.get(i).recycle();
-                    imagesCache.remove(i);
-                    continue;
+            int i = (int) rawX;
+            int j = (int) rawY;
+            int x = (int) (columnSizes[i] + (rawX % 1) * (columnSizes[i + 1] - columnSizes[i]));
+            int y = (int) (rowSizes[j] + (rawY % 1) * (rowSizes[j + 1] - rowSizes[j]));
+            int w = (int) (drawing.getWidth(LengthUnit.POINTS) * IMAGE_W_SCALE_FACTOR * dp);
+            int h = (int) (drawing.getHeight(LengthUnit.POINTS) * IMAGE_H_SCALE_FACTOR * dp);
+            if (i < fixedColumns) x += l;
+            else x += fixColumnOffset;
+            if (j < fixedRows) y += t;
+            else y += fixRowOffset;
+            //if not on screen, recycle(if necessary) and ignore
+            if (!isOnScreen(x, w, i < fixedColumns, l, r, fixedColumnSize) || !isOnScreen(y, h, j < fixedRows, t, b, fixedRowSize)) {
+                if (imagesCache.containsKey(k)) {
+                    imagesCache.get(k).recycle();
+                    imagesCache.remove(k);
                 }
+                continue;
             }
+            //else draw (with cache)
             Bitmap bitmap;
-            if (imagesCache.containsKey(i)) bitmap = imagesCache.get(i);
+            if (imagesCache.containsKey(k)) bitmap = imagesCache.get(k);
             else {
                 byte[] imageData = drawing.getImageData();
                 bitmap = BitmapFactory.decodeByteArray(imageData, 0, imageData.length);
-                imagesCache.put(i, bitmap);
+                imagesCache.put(k, bitmap);
             }
-            from.set(0, 0, bitmap.getWidth(), bitmap.getHeight());
-            to.set(x, y, x + w, y + h);
-            canvas.drawBitmap(bitmap, from, to, paint);
+            //clip canvas before draw, tmpRectF avoid draw out of bounds for freezed cells
+            tmpRect.set(i < fixedColumns ? 0 : fixedColumnSize, j < fixedRows ? 0 : fixedRowSize, getMeasuredWidth(), getMeasuredHeight());
+            tmpRect.offset(l, t);
+            int save = canvas.save();
+            canvas.clipRect(tmpRect);
+            tmpRect.set(0, 0, bitmap.getWidth(), bitmap.getHeight());
+            tmpRectF.set(x, y, x + w, y + h);
+            canvas.drawBitmap(bitmap, tmpRect, tmpRectF, paint);
+            canvas.restoreToCount(save);
         }
         //draw col/row names
-        for (int i = 0; i < sheet.getColumns(); i++) {
-            if (wSizes[i + 1] < l || wSizes[i] > r) continue;
+        for (int i = sheet.getColumns() - 1; i >= 0; i--) {
+            int x = columnSizes[i];
+            int w = columnSizes[i + 1] - x;
+            if (i < fixedColumns) x += l;
+            else x += fixColumnOffset;
+            if (!isOnScreen(x, w, i < fixedColumns, l, r, fixedColumnSize)) continue;
             paint.setColor(0xffcccccc);
-            canvas.drawRect(wSizes[i] - dp, t, wSizes[i + 1] + dp, t + fixedHeight + dp, paint);
+            canvas.drawRect(x - dp, t, x + w, t + fixedHeight, paint);
             paint.setColor(0xfff3f3f3);
-            canvas.drawRect(wSizes[i], t + dp, wSizes[i + 1], t + fixedHeight, paint);
+            canvas.drawRect(x, t + dp, x + w - dp, t + fixedHeight - dp, paint);
             paint.setColor(Color.BLACK);
-            drawText("c" + i, wSizes[i], (int) t, wSizes[i + 1] - wSizes[i], fixedHeight, intToColumnName(i + 1), null, canvas);
+            drawText("c" + i, x, t, w, fixedHeight, intToColumnName(i + 1), null, canvas);
         }
-        for (int i = 0; i < sheet.getRows(); i++) {
-            if (hSizes[i + 1] < t || hSizes[i] > b) continue;
+        for (int i = sheet.getRows() - 1; i >= 0; i--) {
+            int y = rowSizes[i];
+            int h = rowSizes[i + 1] - y;
+            if (i < fixedRows) y += t;
+            else y += fixRowOffset;
+            if (!isOnScreen(y, h, i < fixedRows, t, b, fixedRowSize)) continue;
             paint.setColor(0xffcccccc);
-            canvas.drawRect(l, hSizes[i] - dp, l + fixedWidth + dp, hSizes[i + 1] + dp, paint);
+            canvas.drawRect(l, y - dp, l + fixedWidth, y + h, paint);
             paint.setColor(0xfff3f3f3);
-            canvas.drawRect(l + dp, hSizes[i], l + fixedWidth, hSizes[i + 1], paint);
+            canvas.drawRect(l + dp, y, l + fixedWidth - dp, y + h - dp, paint);
             paint.setColor(Color.BLACK);
-            drawText("r" + i, (int) l, hSizes[i], fixedWidth, hSizes[i + 1] - hSizes[i], "" + (i + 1), null, canvas);
+            drawText("r" + i, l, y, fixedWidth, h, "" + (i + 1), null, canvas);
         }
         paint.setColor(0xffcccccc);
-        canvas.drawRect(l, t, l + fixedWidth + dp, t + fixedHeight + dp, paint);
+        canvas.drawRect(l, t, l + fixedWidth, t + fixedHeight, paint);
         paint.setColor(0xfff3f3f3);
-        canvas.drawRect(l + dp, t + dp, l + fixedWidth, t + fixedHeight, paint);
-//        clear unused layouts
+        canvas.drawRect(l + dp, t + dp, l + fixedWidth - dp, t + fixedHeight - dp, paint);
+        //draw freezed zones borders
+        paint.setColor(0xffcccccc);
+        if (fixedColumns > 0) canvas.drawRect(fixedColumnSize + l - dp, t, fixedColumnSize + fixColumnOffset + l, b, paint);
+        if (fixedRows > 0) canvas.drawRect(l, fixedRowSize + t - dp, r, fixedRowSize + fixRowOffset + t, paint);
+        //clear unused layouts
         for (String i : unusedLayoutsMap) layoutsMap.remove(i);
         unusedLayoutsMap.clear();
         System.gc();
@@ -396,9 +504,12 @@ public class XlsSheetView extends SurfaceView {
         if (style == BorderLineStyle.NONE) return;
         float size;
         if (style == BorderLineStyle.THIN) size = 0;
-        else size = dp;
-        RGB rgb = color.getDefaultRGB();
-        paint.setColor(Color.rgb(rgb.getRed(), rgb.getGreen(), rgb.getBlue()));
+        else size = dp / 2;
+        if (color.getValue() == 64) paint.setColor(Color.BLACK); //set automatic color tmpRectF black, default is white
+        else {
+            RGB rgb = color.getDefaultRGB();
+            paint.setColor(Color.rgb(rgb.getRed(), rgb.getGreen(), rgb.getBlue()));
+        }
         canvas.drawRect(x - size, y - size, x + w + size, y + h + size, paint);
     }
 
