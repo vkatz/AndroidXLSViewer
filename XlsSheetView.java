@@ -2,6 +2,7 @@ package de.telekom.messepresenterdev.widgets;
 
 import android.content.Context;
 import android.graphics.*;
+import android.text.BoringLayout;
 import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
@@ -13,12 +14,12 @@ import android.view.TextureView;
 import android.widget.Scroller;
 import common.LengthUnit;
 import jxl.*;
+import jxl.biff.SheetRangeImpl;
 import jxl.format.*;
 import jxl.format.CellFormat;
 import org.apache.commons.lang3.StringUtils;
 
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -43,6 +44,16 @@ public class XlsSheetView extends TextureView {
     private int cellTextPadding;
     private int fixedHeight;
     private int fixedWidth;
+    private int fixedColumns;
+    private int fixedRows;
+    private int fixedColumnSize;
+    private int fixedRowSize;
+    private int fixColumnOffset;
+    private int fixRowOffset;
+    private int rowSizes[];
+    private int columnSizes[];
+    private ArrayList<Range> mergedCells;
+    private HashSet<String> overflowCells;
 
     //interactions
     private GestureDetector moveDetector;
@@ -58,8 +69,6 @@ public class XlsSheetView extends TextureView {
     private TextPaint textPaint;
     private boolean sheetReady = false;
     private float previousZoom = 1f, zoom = 1f;
-    private int rowSizes[];
-    private int columnSizes[];
 
     //optimizations
     private HashMap<Integer, Bitmap> imagesCache = new HashMap<>();
@@ -139,6 +148,10 @@ public class XlsSheetView extends TextureView {
     }
 
     public void setSheet(Sheet sheet) {
+        paint = new Paint();
+        paint.setAntiAlias(true);
+        textPaint = new TextPaint(paint);
+        textPaint.setTextSize(dp * 18);
         dp = getContext().getResources().getDisplayMetrics().density;
         fixedWidth = (int) (dp * FIXED_CELL_WIDTH);
         fixedHeight = (int) (dp * FIXED_CELL_HEIGHT);
@@ -168,11 +181,39 @@ public class XlsSheetView extends TextureView {
 
         sheetWidth = columnOffset;
         sheetHeight = rowOffset;
-        paint = new Paint();
-        paint.setAntiAlias(true);
-        textPaint = new TextPaint(paint);
-        textPaint.setTextSize(dp * 18);
-        paint.setTextSize(dp * 18);
+        fixedColumns = sheet.getSettings().getHorizontalFreeze();
+        fixedRows = sheet.getSettings().getVerticalFreeze();
+        fixedColumnSize = columnSizes[fixedColumns];
+        fixedRowSize = rowSizes[fixedRows];
+        fixColumnOffset = fixedColumns == 0 ? 0 : (int) (3 * dp);
+        fixRowOffset = fixedRows == 0 ? 0 : (int) (3 * dp);
+
+        mergedCells = new ArrayList<>();
+        Collections.addAll(mergedCells, sheet.getMergedCells());
+        //add overflow cells into merged
+        overflowCells = new HashSet<>();
+        for (int i = 0; i < sheet.getColumns(); i++) {
+            for (int j = 0; j < sheet.getRows(); j++) {
+                Cell cell = sheet.getCell(i, j);
+                String content = cell.getContents();
+                if (!StringUtils.isEmpty(cell.getContents()) && !content.contains("\n")) { //non empty single line
+                    initTextPaint(cell.getCellFormat());
+                    float size = textPaint.measureText(content);
+                    if (size > columnSizes[i + 1] - columnSizes[i]) {
+                        int finalColumn = i;
+                        while (finalColumn + 1 < sheet.getColumns() &&
+                                size > columnSizes[finalColumn + 1] - columnSizes[i] &&
+                                StringUtils.isEmpty(sheet.getCell(finalColumn + 1, j).getContents())) finalColumn++;
+                        if (finalColumn != i) {
+                            mergedCells.add(new SheetRangeImpl(sheet, i, j, finalColumn, j));
+                            overflowCells.add(cellToId(i, j));
+                        }
+                    }
+                }
+            }
+        }
+        System.gc();
+
         scaleDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
@@ -273,6 +314,10 @@ public class XlsSheetView extends TextureView {
         return sCol;
     }
 
+    private String cellToId(int c, int r) {
+        return String.format(Locale.getDefault(), "%d:%d", c, r);
+    }
+
     private boolean isOnScreen(int pos, boolean fixed, int small, int big, int fixedSize) {
         return small + (fixed ? 0 : fixedSize) <= pos && pos <= big;
     }
@@ -293,13 +338,7 @@ public class XlsSheetView extends TextureView {
     private boolean drawSheet(Canvas canvas) {
         if (!sheetReady) return false;
         //limits
-        int fixedColumns = sheet.getSettings().getHorizontalFreeze();
-        int fixedRows = sheet.getSettings().getVerticalFreeze();
         scroller.computeScrollOffset();
-        int fixedColumnSize = columnSizes[fixedColumns];
-        int fixedRowSize = rowSizes[fixedRows];
-        int fixColumnOffset = fixedColumns == 0 ? 0 : (int) (3 * dp);
-        int fixRowOffset = fixedRows == 0 ? 0 : (int) (3 * dp);
         int l = scroller.getCurrX();
         int t = scroller.getCurrY();
         int r = l + getMeasuredWidth();
@@ -308,7 +347,6 @@ public class XlsSheetView extends TextureView {
         canvas.drawColor(Color.WHITE);
         canvas.scale(zoom, zoom);
         canvas.translate(-l, -t);
-        Range[] mergedCells = sheet.getMergedCells();
         unusedLayoutsMap.addAll(layoutsMap.keySet());
         //draw lines
         paint.setColor(0xffcccccc);
@@ -378,7 +416,7 @@ public class XlsSheetView extends TextureView {
                     }
                 }
                 if (cell.getContents() != null)
-                    drawText("" + i + "-" + j, x, y, w, h, cell.getContents(), cellFormat, canvas);
+                    drawText(cellToId(i, j), x, y, w, h, cell.getContents(), mergedCellRoot, cellFormat, canvas);
                 if (clipped) canvas.restoreToCount(save);
             }
         }
@@ -469,7 +507,7 @@ public class XlsSheetView extends TextureView {
             paint.setColor(0xfff3f3f3);
             canvas.drawRect(x, t + dp, x + w - dp, t + fixedHeight - dp, paint);
             paint.setColor(Color.BLACK);
-            drawText("c" + i, x, t, w, fixedHeight, intToColumnName(i + 1), null, canvas);
+            drawText(cellToId(i, -1), x, t, w, fixedHeight, intToColumnName(i + 1), false, null, canvas);
         }
         for (int i = sheet.getRows() - 1; i >= 0; i--) {
             int y = rowSizes[i];
@@ -482,7 +520,7 @@ public class XlsSheetView extends TextureView {
             paint.setColor(0xfff3f3f3);
             canvas.drawRect(l + dp, y, l + fixedWidth - dp, y + h - dp, paint);
             paint.setColor(Color.BLACK);
-            drawText("r" + i, l, y, fixedWidth, h, "" + (i + 1), null, canvas);
+            drawText(cellToId(-1, i) + i, l, y, fixedWidth, h, "" + (i + 1), false, null, canvas);
         }
         paint.setColor(0xffcccccc);
         canvas.drawRect(l, t, l + fixedWidth, t + fixedHeight, paint);
@@ -513,22 +551,33 @@ public class XlsSheetView extends TextureView {
         canvas.drawRect(x - size, y - size, x + w + size, y + h + size, paint);
     }
 
-    private void drawText(String id, int x, int y, int w, int h, String text, CellFormat cellFormat, Canvas canvas) {
+    private void initTextPaint(CellFormat cellFormat) {
+        if (cellFormat != null) {
+            Font font = cellFormat.getFont();
+            RGB rgb = font.getColour().getDefaultRGB();
+            textPaint.setColor(Color.rgb(rgb.getRed(), rgb.getGreen(), rgb.getBlue()));
+            textPaint.setTextSize(font.getPointSize() * FONT_SCALE_FACTOR * dp);
+            textPaint.setTypeface(font.getBoldWeight() > 400 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            textPaint.setUnderlineText(font.getUnderlineStyle() != UnderlineStyle.NO_UNDERLINE);
+        } else {
+            textPaint.setColor(DEFAULT_TEXT_COLOR);
+            textPaint.setTextSize(DEFAULT_TEXT_SIZE * dp);
+            textPaint.setTypeface(Typeface.DEFAULT);
+            textPaint.setUnderlineText(false);
+        }
+    }
+
+    private void drawText(String id, int x, int y, int w, int h, String text, boolean isMerged, CellFormat cellFormat, Canvas canvas) {
         int fw = w - 2 * cellTextPadding;
         int fh = h - 2 * cellTextPadding;
         if (fw <= 0 || fh <= 0) return;
-        canvas.save();
+        int save = canvas.save();
         canvas.translate(x + cellTextPadding, y + cellTextPadding);
         if (canvas.clipRect(0, 0, fw, fh)) {
+            initTextPaint(cellFormat);
             Layout.Alignment hAlign;
             int vAlign; //0 - top, 1-mid, 2-bot
             if (cellFormat != null) {
-                Font font = cellFormat.getFont();
-                RGB rgb = font.getColour().getDefaultRGB();
-                textPaint.setColor(Color.rgb(rgb.getRed(), rgb.getGreen(), rgb.getBlue()));
-                textPaint.setTextSize(font.getPointSize() * FONT_SCALE_FACTOR * dp);
-                textPaint.setTypeface(font.getBoldWeight() > 400 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-                textPaint.setUnderlineText(font.getUnderlineStyle() != UnderlineStyle.NO_UNDERLINE);
                 if (cellFormat.getAlignment() == Alignment.RIGHT || (cellFormat.getAlignment() == Alignment.GENERAL && isRightAlignDefault(text, cellFormat))) hAlign = Layout.Alignment.ALIGN_OPPOSITE;
                 else if (cellFormat.getAlignment() == Alignment.CENTRE) hAlign = Layout.Alignment.ALIGN_CENTER;
                 else hAlign = Layout.Alignment.ALIGN_NORMAL;
@@ -538,25 +587,31 @@ public class XlsSheetView extends TextureView {
             } else {
                 hAlign = Layout.Alignment.ALIGN_CENTER;
                 vAlign = 1;
-                textPaint.setColor(DEFAULT_TEXT_COLOR);
-                textPaint.setTextSize(DEFAULT_TEXT_SIZE * dp);
-                textPaint.setTypeface(Typeface.DEFAULT);
-                textPaint.setUnderlineText(false);
             }
-
-            Layout layout;
+            boolean useBoringLayout = false;
+            if (isMerged && overflowCells.contains(id)) {
+                useBoringLayout = true;
+                hAlign = Layout.Alignment.ALIGN_NORMAL;
+            }
+            Layout layout = null;
             if (layoutsMap.containsKey(id)) layout = layoutsMap.get(id);
             else {
-                layout = new StaticLayout(text, textPaint, fw, hAlign, 1, 0, false);
+                if (useBoringLayout) {
+                    BoringLayout.Metrics metrics = BoringLayout.isBoring(text, textPaint);
+                    if (metrics != null) layout = BoringLayout.make(text, textPaint, fw, hAlign, 1, 0, metrics, false);
+                }
+                if (layout == null) layout = new StaticLayout(text, textPaint, fw, hAlign, 1, 0, false);
                 layoutsMap.put(id, layout);
             }
             unusedLayoutsMap.remove(id);
-            //no need adjust for vAlign ==0 (top)
-            if (vAlign == 1) canvas.translate(0, (fh - layout.getHeight()) / 2);
-            else if (vAlign == 2) canvas.translate(0, fh - layout.getHeight());
+            //no need adjust for vAlign ==0 (top),  if height > cell height - align top (no adjust)
+            if (layout.getHeight() <= fh) {
+                if (vAlign == 1) canvas.translate(0, (fh - layout.getHeight()) / 2);
+                else if (vAlign == 2) canvas.translate(0, fh - layout.getHeight());
+            }
             layout.draw(canvas);
         }
-        canvas.restore();
+        canvas.restoreToCount(save);
     }
 
     @SuppressWarnings("ResultOfMethodCallIgnored")
