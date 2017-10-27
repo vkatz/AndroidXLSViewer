@@ -13,7 +13,7 @@ Use as u want. Provided as it is.
 
 Examples: http://imgur.com/a/pqfZX
 
-##Layout
+## Layout
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <RelativeLayout
