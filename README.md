@@ -65,8 +65,5 @@ Examples: http://imgur.com/a/pqfZX
  }
 ```
 
-## Say "Thanks" for me:
-WMR R109844875467
-WMZ Z424415381288
 
 [![Android Arsenal]( https://img.shields.io/badge/Android%20Arsenal-Android%20XLS%20Viewer-green.svg?style=flat )]( https://android-arsenal.com/details/1/6361 )
